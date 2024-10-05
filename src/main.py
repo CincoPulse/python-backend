@@ -19,4 +19,17 @@ def main():
         print(f"An error occurred: {e}")
 
 if __name__ == '__main__':
+<<<<<<< HEAD
+  main()
+import numpy as np
+import pandas as pd
+from obspy import read
+from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+import os
+
+
+
+=======
     main()
+>>>>>>> 7c280d1d0ae8c7f001125699171839f850795a87
