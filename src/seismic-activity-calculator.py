@@ -15,9 +15,12 @@ from obspy import read
 
 # Helper function to load time-series data (CSV files) with truncation
 def loadcsv_data(file_path, max_time_steps=1000):
-
-# Load your data (time_rel and velocity columns)
-    df = pd.read_csv('./data/lunar/test/data/S12_GradeB/xa.s12.00.mhz.1969-12-16HR00_evid00006.csv')  # Load your data here
+    df = pd.read_csv(file_path)
+    scaler = StandardScaler()
+    if 'velocity(m/s)' in df.columns:
+        df['velocity_normalized'] = scaler.fit_transform(df[['velocity(m/s)']])
+    else:
+        df['velocity_normalized'] = scaler.fit_transform(df[df.columns[1:2]])  # Assume second column is velocity
 
     # Limit to max_time_steps
     time_series_data = df['velocity_normalized'].values[:max_time_steps].reshape(-1, 1)
@@ -119,7 +122,7 @@ def load_datasets_with_mseed(data_path, catalog_path, csv_limit=None, limit=None
             if csv_limit and csv_count >= csv_limit:
                 print(f"Reached CSV limit of {csv_limit}. Skipping additional CSV files.")
                 break
-            time_series = load_csv_data(csv_file_path, max_time_steps)  # Truncate time series to max_time_steps
+            time_series = loadcsv_data(csv_file_path, max_time_steps)  # Truncate time series to max_time_steps
             csv_count += 1
         else:
             print(f"CSV file not found for: {filename}")
@@ -221,7 +224,7 @@ def load_lunar_test_data(test_data_path, max_time_steps=1000):
 
     for csv_file_path in csv_files:
         # Load the CSV data
-        time_series = load_csv_data(csv_file_path, max_time_steps)
+        time_series = loadcsv_data(csv_file_path, max_time_steps)
 
         # Load the corresponding MSEED file (assumed to have the same base filename)
         mseed_file_path = csv_file_path.replace('.csv', '.mseed')
@@ -296,7 +299,6 @@ def evaluate_on_test_data():
     for i, prediction in enumerate(predictions):
         print(f"Test Sample {i + 1}: Predicted Value: {prediction[0]}")
 
-# Main function to load data, train, and test the model
 def main():
     # Define folder paths for lunar data only
     LUNAR_TRAINING_PATH = os.path.join("data", "lunar", "training")
@@ -314,21 +316,18 @@ def main():
         print("Failed to load training data. Exiting.")
         return
 
-    # Split the lunar data into training and validation sets
-    X_train_img, X_val_img, X_train_csv, X_val_csv, X_train_mseed, X_val_mseed, y_train, y_val = train_test_split(
-        lunar_image_data, lunar_csv_data, lunar_mseed_data, lunar_labels, test_size=0.2, random_state=42)
-
-    # Compute class weights to handle class imbalance
-    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
-    class_weights_dict = dict(enumerate(class_weights))
-    print("Class weights:", class_weights_dict)
-
+    # No need to split the data, you can train on the full dataset directly.
     # CNN input shape: (224, 224, 3) for images
     cnn_input_shape = (224, 224, 3)
     # LSTM input shape: (1000, 1) for truncated time-series data (CSV)
     lstm_input_shape = (1000, 1)
     # LSTM input shape: (1000, 1) for truncated MSEED time-series data
     mseed_input_shape = (1000, 1)
+
+    # Compute class weights to handle class imbalance
+    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(lunar_labels), y=lunar_labels)
+    class_weights_dict = dict(enumerate(class_weights))
+    print("Class weights:", class_weights_dict)
 
     # Create and compile the combined model
     combined_model = create_combined_model(cnn_input_shape, lstm_input_shape, mseed_input_shape)
@@ -337,12 +336,11 @@ def main():
     lr_scheduler = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, verbose=1, min_lr=1e-6)
     early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
-    # Train the combined model
+    # Train the combined model on the full dataset
     combined_model.fit(
-        [X_train_img, X_train_csv, X_train_mseed], y_train,
+        [lunar_image_data, lunar_csv_data, lunar_mseed_data], lunar_labels,
         epochs=50,  # Increased epochs for better training
         batch_size=16,  # Reduced batch size
-        validation_data=([X_val_img, X_val_csv, X_val_mseed], y_val),
         class_weight=class_weights_dict,
         callbacks=[lr_scheduler, early_stopping]
     )
