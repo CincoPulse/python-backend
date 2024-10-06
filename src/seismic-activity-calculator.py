@@ -62,6 +62,15 @@ def ensure_csv_extension(filename):
     # Append .csv extension
     return filename + '.csv'
 
+# Helper function to map mq_type to numeric labels
+def map_mq_type_to_label(mq_type):
+    if mq_type == 'shallow_mq':
+        return 0
+    elif mq_type == 'deep_mq':
+        return 1
+    else:
+        return 2  # 'impact_mq'
+
 # Function to load datasets with the actual folder structure and limited time steps for CSV
 def load_datasets_with_mseed(data_path, catalog_path, csv_limit=None, limit=None, max_time_steps=1000):
     image_data, csv_data, mseed_data, labels = [], [], [], []
@@ -96,11 +105,10 @@ def load_datasets_with_mseed(data_path, catalog_path, csv_limit=None, limit=None
         if limit and i >= limit:
             break
 
-        filename = ensure_csv_extension(row['filename']) # Append .csv extension
+        filename = ensure_csv_extension(row['filename'])  # Append .csv extension
 
-        # Extract the numeric part of the 'evid' column and use it as the label
-        evid_numeric = int(row['evid'].replace('evid', ''))
-        label = 1 if evid_numeric % 2 == 0 else 0  # Example: label based on whether 'evid' is even or odd
+        # Map 'mq_type' to numeric labels
+        label = map_mq_type_to_label(row['mq_type'])
 
         # Load the image from the 'plots' folder
         image_file = filename.replace('.csv', '.png')
@@ -151,7 +159,7 @@ def load_datasets_with_mseed(data_path, catalog_path, csv_limit=None, limit=None
     min_length = min(len(image_data), len(csv_data), len(mseed_data), len(labels))
 
     print(f"Number of samples: images={len(image_data)}, csvs={len(csv_data)}, mseeds={len(mseed_data)}, labels={len(labels)}")
-    
+
     # Keep only the first `min_length` samples from each list to ensure consistency
     image_data = image_data[:min_length]
     csv_data = csv_data[:min_length]
@@ -164,13 +172,17 @@ def load_datasets_with_mseed(data_path, catalog_path, csv_limit=None, limit=None
 
     return np.array(image_data), np.array(csv_data_padded), np.array(mseed_data_padded), np.array(labels)
 
+from tensorflow.keras.layers import BatchNormalization, Bidirectional
+
 # CNN model for image data
 def create_cnn(input_shape):
     cnn_input = Input(shape=input_shape)
     x = Conv2D(64, (3, 3), activation='relu', kernel_regularizer=l2(0.001))(cnn_input)
+    x = BatchNormalization()(x)  # Added BatchNormalization
     x = MaxPooling2D(pool_size=(2, 2))(x)
     x = Dropout(0.3)(x)
     x = Conv2D(128, (3, 3), activation='relu', kernel_regularizer=l2(0.001))(x)
+    x = BatchNormalization()(x)  # Added BatchNormalization
     x = MaxPooling2D(pool_size=(2, 2))(x)
     x = Dropout(0.3)(x)
     x = Conv2D(256, (3, 3), activation='relu', kernel_regularizer=l2(0.001))(x)
@@ -186,7 +198,7 @@ def create_cnn(input_shape):
 # LSTM model for time-series (CSV/MSEED) data
 def create_lstm(input_shape):
     lstm_input = Input(shape=input_shape)
-    x = LSTM(128, return_sequences=True)(lstm_input)
+    x = Bidirectional(LSTM(128, return_sequences=True))(lstm_input)  # Changed to Bidirectional LSTM
     x = Dropout(0.3)(x)
     x = LSTM(64)(x)
     x = Dropout(0.3)(x)
@@ -194,7 +206,7 @@ def create_lstm(input_shape):
     
     return Model(inputs=lstm_input, outputs=lstm_output)
 
-# Function to create a combined model with image, CSV, and MSEED inputs
+# Update the combined model to handle multi-class classification
 def create_combined_model(cnn_input_shape, lstm_input_shape, mseed_input_shape):
     cnn_model = create_cnn(cnn_input_shape)
     lstm_csv_model = create_lstm(lstm_input_shape)  # For CSV data
@@ -205,10 +217,14 @@ def create_combined_model(cnn_input_shape, lstm_input_shape, mseed_input_shape):
 
     x = Dense(64, activation='relu', kernel_regularizer=l2(0.001))(combined)
     x = Dropout(0.5)(x)
-    final_output = Dense(1, activation='sigmoid')(x)
+    
+    # Multi-class classification output (3 classes: shallow_mq, deep_mq, impact_mq)
+    final_output = Dense(3, activation='softmax')(x)
 
     model = Model(inputs=[cnn_model.input, lstm_csv_model.input, lstm_mseed_model.input], outputs=final_output)
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    
+    # Use categorical_crossentropy for multi-class classification
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
     
     return model
 
@@ -267,6 +283,70 @@ def create_lstm_only_model(lstm_input_shape, mseed_input_shape):
     
     return model
 
+from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve
+import seaborn as sns
+
+# Plot loss function
+def plot_loss(history):
+    plt.plot(history.history['loss'], label='Train Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+    plt.show()
+
+# Function to plot Histogram of Predictions
+def plot_histogram_of_predictions(predictions):
+    plt.figure(figsize=(8, 6))
+    plt.hist(predictions, bins=20, color='blue', alpha=0.7)
+    plt.xlabel('Predicted Probability')
+    plt.ylabel('Frequency')
+    plt.title('Histogram of Predicted Values')
+    plt.show()
+
+def plot_confusion_matrix(y_true, y_pred):
+    y_true = np.argmax(y_true, axis=1)  # Convert one-hot to class index
+    y_pred = np.argmax(y_pred, axis=1)  # Convert predicted one-hot to class index
+    cm = confusion_matrix(y_true, y_pred)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Shallow', 'Deep', 'Impact'], yticklabels=['Shallow', 'Deep', 'Impact'])
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+    plt.title('Confusion Matrix')
+    plt.show()
+
+def plot_roc_curve(y_true, y_pred):
+    y_true = np.argmax(y_true, axis=1)  # Convert one-hot to class index
+    y_pred = np.argmax(y_pred, axis=1)  # Convert predicted one-hot to class index
+    fpr, tpr, _ = roc_curve(y_true, y_pred)
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc='lower right')
+    plt.show()
+
+
+def plot_precision_recall_curve(y_true, y_pred):
+    y_true = np.argmax(y_true, axis=1)  # Convert one-hot to class index
+    y_pred = np.argmax(y_pred, axis=1)  # Convert predicted one-hot to class index
+    precision, recall, _ = precision_recall_curve(y_true, y_pred)
+
+    plt.figure()
+    plt.plot(recall, precision, marker='.', label='Precision-Recall Curve')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.legend(loc="lower left")
+    plt.show()
+
+# Evaluate function with integrated plots
 def evaluate_on_test_data():
     # Define the test data path
     LUNAR_TEST_PATH = os.path.join("data", "lunar", "test")
@@ -295,9 +375,24 @@ def evaluate_on_test_data():
     dummy_images = np.zeros((test_csv_data.shape[0], 224, 224, 3))  # Dummy image data
     predictions = combined_model.predict([dummy_images, test_csv_data, test_mseed_data], verbose=1)
 
-    # Display the predictions
+    # Generate synthetic labels for testing purposes
+    synthetic_labels = np.random.randint(0, 2, size=len(predictions))
+
+    # Plot confusion matrix
+    plot_confusion_matrix(synthetic_labels, predictions)
+
+    # Plot ROC curve
+    plot_roc_curve(synthetic_labels, predictions)
+
+    # Plot Precision-Recall curve
+    plot_precision_recall_curve(synthetic_labels, predictions)
+
+    # Optionally print predictions
     for i, prediction in enumerate(predictions):
         print(f"Test Sample {i + 1}: Predicted Value: {prediction[0]}")
+
+from sklearn.model_selection import KFold
+from tensorflow.keras.utils import to_categorical
 
 def main():
     # Define folder paths for lunar data only
@@ -324,8 +419,11 @@ def main():
     # LSTM input shape: (1000, 1) for truncated MSEED time-series data
     mseed_input_shape = (1000, 1)
 
+    lunar_labels = to_categorical(lunar_labels, num_classes=3)
+
     # Compute class weights to handle class imbalance
-    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(lunar_labels), y=lunar_labels)
+    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(np.argmax(lunar_labels, axis=1)), y=np.argmax(lunar_labels, axis=1))
+
     class_weights_dict = dict(enumerate(class_weights))
     print("Class weights:", class_weights_dict)
 
@@ -341,7 +439,7 @@ def main():
         [lunar_image_data, lunar_csv_data, lunar_mseed_data], lunar_labels,
         epochs=50,  # Increased epochs for better training
         batch_size=16,  # Reduced batch size
-        class_weight=class_weights_dict,
+        validation_split=0.2,  # Add a validation split to track progress
         callbacks=[lr_scheduler, early_stopping]
     )
 
