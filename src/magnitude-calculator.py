@@ -15,9 +15,12 @@ from obspy import read
 
 # Helper function to load time-series data (CSV files) with truncation
 def loadcsv_data(file_path, max_time_steps=1000):
-
-# Load your data (time_rel and velocity columns)
-    df = pd.read_csv('./data/lunar/test/data/S12_GradeB/xa.s12.00.mhz.1969-12-16HR00_evid00006.csv')  # Load your data here
+    df = pd.read_csv(file_path)
+    scaler = StandardScaler()
+    if 'velocity(m/s)' in df.columns:
+        df['velocity_normalized'] = scaler.fit_transform(df[['velocity(m/s)']])
+    else:
+        df['velocity_normalized'] = scaler.fit_transform(df[df.columns[1:2]])  # Assume second column is velocity
 
     # Limit to max_time_steps
     time_series_data = df['velocity_normalized'].values[:max_time_steps].reshape(-1, 1)
