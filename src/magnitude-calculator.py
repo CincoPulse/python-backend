@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load your data (time_rel and velocity columns)
-df = pd.read_csv('/Users/tatiatsiklauri/Desktop/space_apps_2024_seismic_detection/data/lunar/test/data/S12_GradeB/xa.s12.00.mhz.1969-12-16HR00_evid00006.csv')  # Load your data here
+df = pd.read_csv('./data/lunar/test/data/S12_GradeB/xa.s12.00.mhz.1969-12-16HR00_evid00006.csv')  # Load your data here
 
 # STA/LTA Parameters
 short_window = 50   # Short-term window size (in data points)
